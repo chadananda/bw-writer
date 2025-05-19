@@ -1,0 +1,80 @@
+{
+  "name": "bw-writer",
+  "version": "0.2.1",
+  "description": "MCP server and CLI for article writing. See README for CLI/server usage in Cursor and Windsurf.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./mcp": "./src/framework/interface/mcp-stdio.js",
+    "./api": "./src/framework/interface/api.js"
+  },
+  "bin": {
+    "bw-writer": "./src/framework/interface/cli.js",
+    "bw-writer-server": "./src/framework/interface/mcp-stdio.js"
+  },
+  "scripts": {
+    "start": "node src/framework/interface/mcp-stdio.js",
+    "mcp": "node src/framework/interface/mcp-stdio.js",
+    "mock": "MOCK_MODE=1 node src/framework/interface/mcp-stdio.js",
+    "dev": "nodemon src/framework/interface/mcp-stdio.js",
+    "cli": "node src/framework/interface/cli.js",
+    "api": "node src/framework/interface/api.js",
+    "http": "node src/framework/interface/mcp-http.js",
+    "test:tools": "DEBUG=1 vitest run test/analyzeRequest.test.js",
+    "test:mcp": "DEBUG=1 vitest run test/mcp-server.test.js test/mcp-stdio.test.js test/mcp-http.test.js",
+    "test:cli": "DEBUG=1 vitest run test/cli.test.js",
+    "test:sdk": "DEBUG=1 vitest run test/sdk.test.js",
+    "test:integration": "DEBUG=1 vitest run test/integration.test.js",
+    "test:all": "DEBUG=1 npm run test:tools",
+    "test": "DEBUG=1 npm run test:all",
+    "test:interfaces": "vitest run test/api.test.js test/cli.test.js test/mcp-stdio.test.js test/mcp-http.test.js",
+    "test:protocol": "node test/mcp-protocol-validator.js \"node src/app/mcp-stdio.js\"",
+    "clean": "rm -f debug.log mcp-validation.log mcp-results.json",
+    "generate-article": "node test/data/generate_article.js"
+  },
+  "keywords": [
+    "mcp",
+    "article",
+    "writer",
+    "perplexity",
+    "claude",
+    "anthropic",
+    "research",
+    "content",
+    "blogworks",
+    "blog"
+  ],
+  "author": "Chad Jones <chadananda@gmail.com>",
+  "homepage": "https://blogworks.ai",
+  "license": "MIT",
+  "devDependencies": {
+    "node-fetch": "^3.3.2",
+    "nodemon": "^3.0.2",
+    "vitest": "^3.1.3"
+  },
+  "dependencies": {
+    "@anthropic-ai/bedrock-sdk": "^0.6.2",
+    "@aws-sdk/client-s3": "^3.812.0",
+    "@modelcontextprotocol/sdk": "^1.11.2",
+    "any-llm": "^0.1.26",
+    "commander": "^13.1.0",
+    "cors": "^2.8.5",
+    "dataforseo-client": "^1.0.31",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "express-openapi-validator": "^5.5.0",
+    "express-rate-limit": "^7.1.0",
+    "figlet": "^1.8.1",
+    "helmet": "^7.1.0",
+    "ky": "^1.8.1",
+    "markdown-it": "^14.1.0",
+    "p-limit": "^6.2.0",
+    "swagger-ui-express": "^5.0.1",
+    "uuid": "^9.0.1",
+    "zod": "^3.24.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
