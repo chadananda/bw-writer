@@ -1,67 +1,45 @@
-// LLM client utilities for MCP server tools using any-llm
-// https://www.npmjs.com/package/any-llm
+// LLM client utilities using llm.js
+// https://github.com/themaximalist/llm.js
 
 import { z } from 'zod';
-import { Client } from 'any-llm';
+import ky from 'ky';
+import LLM from '@themaximalist/llm.js';
 import { debugLog } from './log.js';
+import { zodToJsonSchema } from 'zod-to-json-schema';
+import OpenAI from 'openai';
+import Anthropic from '@anthropic-ai/sdk';
+import { LLM_CONFIGS } from './llm-configs.js';
 
-// Error messages are now logged directly with debugLog
-
-// Predefined LLM configurations - key is model name for easy reference
-export const LLM_CONFIGS = {
-  // OpenAI models
-  'gpt4o': {
-    provider: 'openai', model: 'gpt-4o', temperature: 0.7,
-    max_tokens: 2048, key: 'OPENAI_API_KEY'
-  },
-  'gpt4turbo': {
-    provider: 'openai', model: 'gpt-4-turbo-preview', temperature: 0.7,
-    max_tokens: 2048, key: 'OPENAI_API_KEY'
-  },
-  // Anthropic models
-  'claude3sonnet': {
-    provider: 'anthropic', model: 'claude-3-5-sonnet-20240620', temperature: 0.2,
-    max_tokens: 2048, key: 'ANTHROPIC_API_KEY'
-  },
-  'claude3opus': {
-    provider: 'anthropic', model: 'claude-3-opus-20240229', temperature: 0.3,
-    max_tokens: 2048, key: 'ANTHROPIC_API_KEY'
-  },
-  // Other providers
-  'perplexity': {
-    provider: 'perplexity', model: 'sonar-large-chat', temperature: 0.2,
-    max_tokens: 2048, key: 'PERPLEXITY_API_KEY', apiBaseUrl: 'https://api.perplexity.ai'
-  },
-  'mistral': {
-    provider: 'mistral', model: 'mistral-large-latest', temperature: 0.3,
-    max_tokens: 2048, key: 'MISTRAL_API_KEY', apiBaseUrl: 'https://api.mistral.ai/v1'
-  },
-  'llama3': {
-    provider: 'groq', model: 'llama3-70b-8192', temperature: 0.3,
-    max_tokens: 2048, key: 'GROQ_API_KEY', apiBaseUrl: 'https://api.groq.com/openai/v1'
-  },
-  'commandr': {
-    provider: 'cohere', model: 'command-r-plus', temperature: 0.3,
-    max_tokens: 2048, key: 'COHERE_API_KEY'
-  },
-  'openrouter': {
-    provider: 'openrouter', model: 'openai/gpt-4-turbo-preview', temperature: 0.3,
-    max_tokens: 2048, key: 'OPENROUTER_API_KEY'
-  }
-};
 
 // Default model to use when none specified
-export const DEFAULT_LLM_CONFIG = 'gpt4o';
+export const DEFAULT_LLM_CONFIG = 'gpt4oMini';
 
-// Schema for LLM config validation
+
+// Define schema for LLM config validation
 const LLMConfigSchema = z.object({
-  provider: z.string().min(1, 'Provider is required'),
-  model: z.string().min(1, 'Model is required'),
-  temperature: z.number().min(0).max(2).optional(),
-  max_tokens: z.number().int().positive().optional(),
-  key: z.string().min(1, 'API key environment variable name is required'),
-  apiBaseUrl: z.string().url().optional(),
-  // Add other common LLM parameters as needed
+  // Required fields
+  provider: z.string(),
+  model: z.string(),
+
+  // Optional with defaults
+  temperature: z.number().optional().default(0.7),
+  max_tokens: z.number().optional().default(1000),
+
+  // API and schema
+  key: z.string().optional(),
+  apiKey: z.string().optional(),
+  schema: z.any().optional(),
+
+  // Pricing information (per 1M tokens)
+  price_input: z.number().optional(),
+  price_output: z.number().optional(),
+
+  // Capabilities
+  tool_calls_supported: z.boolean().optional().default(false),
+
+  // Other metadata
+  description: z.string().optional(),
+  context_length: z.number().optional()
 }).strict();
 
 /**
@@ -74,129 +52,178 @@ export function llmConfigValidator(config) {
   return LLMConfigSchema.parse(config);
 }
 
-// Loads a key value by name (future-proof for other sources)
-export function loadAPIKey(keyName) {
-  // In future, could check key vaults, files, etc.
-  return process.env[keyName] || '';
+/** Reads API key from environment variables */
+export function readKey(keyName) {
+  const key = process.env[keyName];
+  if (!key) debugLog(`WARNING: API key ${keyName} not found in environment variables`);
+  return key || '';
 }
 
 
-/**
- * Extracts JSON from a string by finding the first { and last }
- * @param {string} str - The string to extract JSON from
- * @returns {string} The extracted JSON string
- */
-function extractJSON(str) {
-  const firstBrace = str.indexOf('{');
-  const lastBrace = str.lastIndexOf('}');
-  if (firstBrace === -1 || lastBrace === -1) {
-    throw new Error('No JSON object found in the response');
-  }
-  return str.slice(firstBrace, lastBrace + 1);
-}
+export async function callLLM(prompt, llm = DEFAULT_LLM_CONFIG, cfg={}) {
+  let { systemMessage = '', schema = null, maxTries = 3, ...rest } = cfg;
 
-/**
- * Robust LLM call using any-llm. Handles env keys, config, and provider-specific logic.
- * @param {string} prompt - The user's input prompt
- * @param {string|object} [modelOrConfig='gpt4o'] - Model name (from LLM_CONFIGS) or full config object
- * @param {object} [options={}] - Additional options
- * @param {string} [options.systemMessage] - Optional system message
- * @param {z.ZodSchema} [options.jsonSchema] - Optional JSON schema for JSON mode
- * @param {number} [options.maxRetries=2] - Maximum number of retries for JSON validation
- * @returns {Promise<any>} LLM completion (parsed JSON if jsonSchema is provided, otherwise string)
- */
-export async function callLLM(prompt, cfg = DEFAULT_LLM_CONFIG, options = {}) {
-  const { systemMessage, jsonSchema, maxRetries = 2, ...otherOptions } = options;
-  let config;
-  try {
-    if (typeof cfg === 'string') {
-      config = LLM_CONFIGS[cfg];
-      if (!config) throw new Error(`Unknown model: ${cfg}. Available models: ${Object.keys(LLM_CONFIGS).join(', ')}`);
-    } else config = llmConfigValidator(cfg);
-  } catch (error) { throw new Error(`LLM config validation failed: ${error.message}`); }
+  // set up config, apiKey, schema
+  const config = { ...(typeof llm === 'string' ? LLM_CONFIGS[llm || DEFAULT_LLM_CONFIG] : llm), ...rest };
+  config.apiKey = config.apiKey || readKey(config.key);
+  if (!config.apiKey) throw new Error(`No API key found for ${config.model}`);
+  if (!schema) schema = z.object({ result: z.string() });
+  config.schema = zodToJsonSchema(schema); // Convert Zod schema to JSON schema
 
-  // Load API key
-  const apiKey = loadAPIKey(config.key);
-  if (!apiKey) throw new Error(`Key not found. Please set ${config.key} in your environment.`);
+  // set up prompt and system messages
+  prompt += `\n\n Return only a valid JSON object (no extra text) matching this schema: \n\n======\n\n${JSON.stringify(config.schema)} \n\n=======\n\n`;
+  const systemMessages = systemMessage.trim() ? [{ role: 'system', content: systemMessage }] : [];
+  // add additional json system message here if needed
+  const messages = [...systemMessages, { role: 'user', content: prompt }];
 
-  // Prepare messages
-  const messages = [];
-  if (systemMessage) messages.push({ role: 'system', content: systemMessage });
-  // Add JSON schema to system message if provided
-  if (jsonSchema) {
-    messages.push({
-      role: 'system',
-      content: `You MUST respond with a valid JSON object that matches the following schema. Do not include any text outside the JSON: ${JSON.stringify(jsonSchema)}`
-    });
-  }
-  messages.push({ role: 'user', content: prompt });
-  debugLog(`Calling LLM (${config.provider}/${config.model}) with prompt:`, prompt);
+  // set up the handler depending on the provider
+  let handler;
+  if(config.provider==='openai')handler=openai_handler;
+  else if(config.provider==='anthropic')handler=anthropic_handler;
+  else if(config.provider==='perplexity')handler=perplexity_handler;
+  else throw new Error(`Unsupported provider: ${config.provider}`);
 
-  const client = new Client(config.provider, { [config.key]: apiKey });
-  const openAICompatible = ['openai', 'anthropic', 'google', 'groq', 'mistral', 'openrouter', 'cohere'];
-  const isOpenAI = openAICompatible.includes(config.provider);
-  let attempts = 0, lastError;
-
-  while (attempts <= maxRetries) {
-    const request = {
-      ...config,
-      ...(jsonSchema && { response_format: { type: 'json_object' } }),
-      ...otherOptions,
-      ...(isOpenAI ? {} : { messages })
-    };
-
-    const response = await (isOpenAI
-      ? client.createChatCompletionNonStreaming(request, messages)
-      : client.createChatCompletionNonStreaming(request));
-
-    if (!jsonSchema) return response;
-
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-      debugLog('ERROR: No JSON found in response');
-      attempts++;
-      if (attempts > maxRetries) break;
-      messages.push({ role: 'system', content: 'Please respond with valid JSON.' });
-      await new Promise(r => setTimeout(r, 500 * attempts));
-      continue;
-    }
-
+  // try to get a validated response
+  let lastErr, lastRes;
+  for (let i = 0; i < maxTries; i++) {
     try {
-      const parsed = JSON.parse(jsonMatch[0]);
-      const result = jsonSchema.safeParse(parsed);
-      if (result.success) return result.data;
-      debugLog('ERROR: JSON validation failed:', result.error.message);
-      if (++attempts > maxRetries) break;
-      messages.push({ role: 'system', content: `JSON validation failed: ${result.error.message}. Please correct.` });
+      const result = await handler(messages, config);
+      if (result && Object.keys(result).length > 0) {
+        debugLog(`Attempt ${i + 1} succeeded with result:`, JSON.stringify(result).substring(0, 200));
+        return result;
+      }
+      debugLog(`Attempt ${i + 1} returned empty result`);
     } catch (e) {
-      debugLog('ERROR: Failed to parse JSON:', e.message);
-      if (++attempts > maxRetries) break;
-      messages.push({ role: 'system', content: 'Invalid JSON format. Please respond with valid JSON.' });
+      lastErr = e;
+      debugLog(`Attempt ${i + 1} failed:`, e.message);
     }
-    await new Promise(r => setTimeout(r, 500 * attempts));
   }
 
-  debugLog('ERROR: LLM call failed after max retries');
+  const errorMsg = lastErr ?
+    `Failed after ${maxTries} attempts. Last error: ${lastErr.message}` :
+    `Failed after ${maxTries} attempts. No valid response received.`;
+
+  throw new Error(`${errorMsg} Last response: ${JSON.stringify(lastRes)}`);
+}
+
+
+/**
+ * Direct OpenAI API call with JSON mode and schema support for debugging.
+ * @param {string} prompt
+ * @param {object} config
+ * @returns {Promise<object|string>} Parsed JSON or raw string
+ */
+// Handler for OpenAI chat completions with JSON response support
+export const openai_handler = async (messages, config) => {
+  // Extract relevant parameters from config
+  const { schema: parameters, apiKey, model, temperature, max_tokens } = config;
+  const openai = new OpenAI({ apiKey });
+
+  // Send chat completion request with function/tool call and JSON response format
+  const response = await openai.chat.completions.create({
+    model, messages, temperature, max_tokens,
+    response_format: { type: 'json_object' },
+    tools: [{ type: 'function', function: { name: 'extract', description: 'Extracts JSON object', parameters } }]
+  });
+
+  // Try to parse tool call arguments from the response (preferred way)
+  const args = response.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+  if (args) return JSON.parse(args);
+  // Fallback: If tool call is missing, try to extract JSON from content
+  return extractJson(response.choices?.[0]?.message?.content);
+};
+
+// --- Perplexity API Handler ---
+// Extracts first JSON object from Perplexity API response
+export async function perplexity_handler(messages, config) {
+  // Setup variables and validate
+  const apiKey = process.env.PERPLEXITY_API_KEY;
+  if (!apiKey) throw new Error('PERPLEXITY_API_KEY environment variable not set');
+  let { model, temperature = 0.7, max_tokens = 2048 } = config;
+  messages = Array.isArray(messages) ? messages : [{ role: 'user', content: messages }];
+  temperature = Math.min(Math.max(config.temperature || 0.7, 0), 1);
+  max_tokens = Math.min(Math.max(parseInt(config.max_tokens || 2048), 1), 4096);
+
+  // Make API request
+  const headers = { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
+  const body = { model, messages, temperature, max_tokens, stream: false};
+  const timeout = config.timeout || 30000;
+  const throwHttpErrors = config.throwHttpErrors || false;
+  const perplexity_url = 'https://api.perplexity.ai/chat/completions';
+  const response = await ky.post(perplexity_url, {headers, json: body, timeout, throwHttpErrors})
+       .catch(() => ({}));
+  if (!response?.ok) return {};
+
+  // Process response and extract content
+  const data = await response.json().catch(() => null);
+  if (!data?.choices?.[0]) return {};
+  const content = data.choices[0]?.message?.content || data.choices[0]?.text || '';
+  return extractJson(content);
+}
+
+// --- Anthropic API Handler ---
+// Extracts first valid JSON from Claude's response
+export const anthropic_handler = async (messages, config) => {
+  const apiKey = config.apiKey || readKey(config.key);
+  if (!apiKey) throw new Error('No API key');
+  const { model, temperature, max_tokens } = config;
+  const anthropic = new Anthropic({ apiKey });
+  const r = await anthropic.messages.create({ model, messages, max_tokens, temperature }).catch(() => null);
+  if (!r) return {};
+  const content = r.content?.[0]?.text || r.completion || '';
+  return extractJson(content);
+};
+
+
+
+
+
+
+
+// Helper function for quick LLM calls
+export const quickLLM = async (prompt, model = DEFAULT_LLM_CONFIG) => {
+  return callLLM(prompt, model);
+};
+
+// Helper function for boolean responses (yes/no questions)
+export const quickLLMBool = async (prompt, model = DEFAULT_LLM_CONFIG) => {
+  const result = await callLLM(prompt, model, {
+    jsonSchema: z.object({ answer: z.boolean() })
+  });
+  return result.answer === true || String(result.answer).toLowerCase().includes('yes');
+};
+
+// Extracts JSON from text with markdown code block support
+export function extractJson(text) {
+  if (!text) return null;
+
+  // Helper to parse and validate JSON
+  const tryParse = str => {
+    try {
+      const result = JSON.parse(str);
+      return result && typeof result === 'object' ? result : null;
+    } catch { return null; }
+  };
+
+  // Try direct parse first
+  const direct = tryParse(text);
+  if (direct) return direct;
+
+  // Try extracting from markdown code blocks (```json or ```)
+  const codeBlock = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+  if (codeBlock) {
+    const parsed = tryParse(codeBlock[1]);
+    if (parsed) return parsed;
+  }
+
+  // Try extracting any JSON object
+  const jsonMatch = text.match(/\{[\s\S]*?\}/);
+  if (jsonMatch) return tryParse(jsonMatch[0]);
+
   return null;
 }
 
-
-// wrap an llm call in a helper function for quick calls
-export const quickLLM = async (prompt, model = DEFAULT_LLM_CONFIG) => {
-  return callLLM(prompt, model);
-}
-
-// now for one that does JSON to answer yes or no questions as boolean
-export const quickLLMBool = async (prompt, model = DEFAULT_LLM_CONFIG) => {
-  // should return answer as yes or no and we translate that into a boolean
-  const result = await callLLM(prompt, model, { jsonSchema: z.object({ answer: z.boolean() }) });
-  // regex to see if contains yes, case insensitive
-  return result.answer.match(/yes/i) !== null;
-};
-
-// now for one that returns a json object
+// Helper function for JSON responses
 export const quickLLMJSON = async (prompt, schema, model = DEFAULT_LLM_CONFIG) => {
   return callLLM(prompt, model, { jsonSchema: schema });
 };
-
-

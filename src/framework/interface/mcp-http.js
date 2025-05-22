@@ -10,7 +10,7 @@ import express from 'express';
 import cors from 'cors';
 import { createTool } from '../utils/mcp-base.js';
 import { application } from '../application.js';
-import { getMockData } from '../../test/mocks/mock_data.js';
+
 
 // Create Express app
 const app = express();

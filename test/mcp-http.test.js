@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 // Skipped: required 'supertest' for HTTP integration, which is not allowed by project policy.
 import { application } from '../src/application.js';
-import { getMockData } from './mocks/mock_data.js';
+
 
 // Import the MCP HTTP module directly
 import app from '../src/app/mcp-http.js';

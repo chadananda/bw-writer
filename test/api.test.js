@@ -5,7 +5,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 // Skipped: required 'supertest' for HTTP integration, which is not allowed by project policy.
 import express from 'express';
 import { application } from '../src/application.js';
-import { getMockData } from './mocks/mock_data.js';
+
 
 // Import the API module
 import apiSetup from '../src/app/api.js';

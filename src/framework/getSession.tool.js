@@ -24,7 +24,7 @@ async function getSessionImpl(params, context) {
         return session;
       }
     }
-    
+
     // If session not found or no session manager
     return { error: 'Session not found' };
   } catch (error) {
@@ -50,7 +50,7 @@ export default {
   },
   handler: async (params, { debug, mockMode, server }) => {
     debug(`Executing get_session with params: ${JSON.stringify(params)}`);
-    
+
     if (mockMode) {
       return {
         id: params.sessionId,
@@ -77,7 +77,10 @@ export default {
         }
       };
     }
-    
+
     return getSessionImpl(params, { server });
   }
 };
+
+
+

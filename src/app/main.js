@@ -34,7 +34,7 @@ import embedMedia from './tools/embedMedia.tool.js';
 import generateProposals from './tools/generateProposals.tool.js';
 
 // Import mock data for testing
-import getMockData from '../../test/mocks/mock_data.js';
+
 
 // Load environment variables
 dotenv.config();

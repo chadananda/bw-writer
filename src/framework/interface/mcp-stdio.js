@@ -19,7 +19,7 @@ process.on('unhandledRejection', err => {
 import 'dotenv/config';
 import { McpServer, createTool } from '../utils/mcp-base.js';
 import { application } from '../application.js';
-import { getMockData } from '../../test/mocks/mock_data.js';
+
 
 // Create MCP server instance
 const server = new McpServer({

@@ -12,7 +12,7 @@ import swaggerUi from 'swagger-ui-express';
 import expressOpenApiValidator from 'express-openapi-validator';
 const { OpenApiValidator } = expressOpenApiValidator;
 import { loadPackageMetadata } from '../utils/metadata-loader.js';
-import { getMockData } from '../../test/mocks/mock_data.js';
+
 import { application } from '../application.js';
 
 /**
